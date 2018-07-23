@@ -1,18 +1,20 @@
 # coding: utf-8
 import struct
+import sys
+import os
 
-p32 = lambda x: struct.pack('<L', x)
 u32 = lambda x: struct.unpack('<L', x)[0]
 
 class MbrParser:
     def __init__(self, image_path):
         self.fd = open(image_path, 'rb')
+        self.partition_cnt = 0
     
     def read_sectors(self, sector, count = 1):
         self.fd.seek(sector * 512)   # PhysicalDrive 읽을 때는 f.seek()안에 꼭 512 단위로 넣어주어야 한다.
         return self.fd.read(count * 512)
 
-    def read(self):
+    def print_partitions(self):
         get_type = lambda x: x[4]
         get_start_addr = lambda x: u32(x[8:12])*512
         get_size = lambda x: u32(x[12:16])*512
@@ -29,13 +31,14 @@ class MbrParser:
             partition_entry = [partition_table[j:j+16] for j in range(0, 64, 16)]
             i = 0
             while (get_type(partition_entry[i]) == 0x07):
-                print("partition {}:".format(i))
+                self.partition_cnt += 1
+                print("partition {}:".format(self.partition_cnt))
                 print("    LAB addr(byte)      : {}".format(get_start_addr(partition_entry[i]) + partition_axis))
                 print("    partiton size(byte) : {}".format(get_size(partition_entry[i])))
                 i += 1
             
             if (get_type(partition_entry[i]) == 0x05):
-                print("[*] EBR detected")
+                # print("[*] EBR detected")
                 # next ebr entry의 주소 + ebr_axis = 다음 ebr 주소.
                 partition_axis = get_start_addr(partition_entry[i]) + ebr_axis
                 if ebr_axis == 0:
@@ -56,6 +59,11 @@ class MbrParser:
 
 if __name__=="__main__":
     # physical drive path : "\\\\.\\PhysicalDrive0"
-    parser = MbrParser("./mbr/mbr_128.dd")
-    parser.read()
+    image_path = input("[*] mbr image path를 입력하세요 : ")
+    if (os.path.exists(image_path) == False):
+        print("[*] 입력한 경로에 파일이 없습니다")
+        sys.exit()
+
+    parser = MbrParser(image_path)
+    parser.print_partitions()
 
