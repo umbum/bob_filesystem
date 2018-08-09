@@ -74,6 +74,7 @@ class FAT32Parser:
         isLfn  = lambda x: (attribute(x) == 0x0f)
         isDir  = lambda x: ((attribute(x) & 0x10) == 0x10)
         isFile = lambda x: ((attribute(x) & 0x20) == 0x20)
+        isUnallocated = lambda x: (x == b'\x00'*32)
         firstCluster = lambda x: (u16(x[20:20+2]) << 8) + u16(x[26:26+2])
         fileSize     = lambda x: u32(x[28:28+4])
         ################ lfn #################
@@ -86,7 +87,7 @@ class FAT32Parser:
         print("{0:<26}{1:<15}{2:<10}{3:<10}{4:<20}".format("이름", "파일(F)/디렉토리(D)", "시작 클러스터", "파일 사이즈", "지워짐(D) 여부"))
         for i in range(0, len(b), 32):
             e = b[i:i+32]
-            if attribute(e) == 0x00:
+            if isUnallocated(e):
                 break
             elif isLfn(e):
                 lfn = lfnName(e) + lfn
@@ -123,6 +124,7 @@ class FAT32Parser:
 
 if __name__=="__main__":
     image_path = input("[*] fat32 partition image path를 입력하세요 : ")
+    # image_path = "C:\\Users\\umbum\\source\\Github\\bob_filesystem\\fat32\\fat32.dd"
     if (os.path.exists(image_path) == False):
         print("[*] 입력한 경로에 파일이 없습니다")
         sys.exit()
