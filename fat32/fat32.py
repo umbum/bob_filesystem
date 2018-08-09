@@ -86,7 +86,9 @@ class FAT32Parser:
         print("{0:<26}{1:<15}{2:<10}{3:<10}{4:<20}".format("이름", "파일(F)/디렉토리(D)", "시작 클러스터", "파일 사이즈", "지워짐(D) 여부"))
         for i in range(0, len(b), 32):
             e = b[i:i+32]
-            if isLfn(e):
+            if attribute(e) == 0x00:
+                break
+            elif isLfn(e):
                 lfn = lfnName(e) + lfn
                 # order는 따로 체크하지 않는데, lfn이 아닌 엔트리를 만날 때 까지 읽어나가면 되기 때문.
             else:
@@ -128,9 +130,8 @@ if __name__=="__main__":
     parser = FAT32Parser(image_path)
     
     for cluster in parser.getNextCluster(parser.root_dir_cluster):
-        data = parser.readSectors(parser.getSectorFromCluster(cluster))
+        data = parser.readSectors(parser.getSectorFromCluster(cluster), count=parser.spc)
         parser.parseDirectoryEntry(data)
         if cluster == -1:
             print("err!!!")
             break
-
