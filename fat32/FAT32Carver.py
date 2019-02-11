@@ -2,12 +2,15 @@ import os, sys
 
 import io
 import zipfile
+import zlib
+import struct
+
 from fat32 import FAT32Parser, u32, u16
 
+u8 = lambda x: struct.unpack("<B", x)[0]
 
 class FAT32Carver(FAT32Parser):
     def carving(self):
-        ftype = "unknown"
         fat_start_sector = self.reserved_sector_cnt
         fat_data = self.readSectors(fat_start_sector, count=self.fat_size)    # get FAT data (FAT1)
         for i in range(0, len(fat_data), 4):
@@ -21,15 +24,17 @@ class FAT32Carver(FAT32Parser):
                 
                 print("{}\t{}".format(cluster_num, ftype))
                 if ftype == "zip":
-                    dstream = io.BytesIO(data)
-                    with zipfile.ZipFile(dstream, 'r') as zip_f:
-                        for in_file in zip_f.namelist():
-                            in_file_ftype = self.parseExt(zip_f.read(in_file))
-                            print("\t{}\t{}".format(in_file, in_file_ftype))
-
+                    zip_f = MyZipFile(data)
+                    for in_fname in zip_f.namelist():
+                        in_fdata = zip_f.read(in_fname)
+                        if in_fdata is None or len(in_fdata) < 20:
+                            in_ftype = "(lack of info)"
+                        else:
+                            in_ftype = self.parseExt(in_fdata)
+                        print("\t{} {}".format(in_fname, in_ftype))
+                
 
     def parseExt(self, data):
-        # TODO : office와 zip을 먼저 해결하고, file signature db에 있는거 파싱해와서 추가
         if data[:2] == b"\xff\xd8":
             ftype = "jpg"
         elif data[:6] in (b"\x47\x49\x46\x38\x37\x61", b"\x47\x49\x46\x38\x39\x61"):
@@ -49,24 +54,17 @@ class FAT32Carver(FAT32Parser):
             ftype = "PE (exe | dll)"
         elif data[:4] == b"\x50\x4B\x03\x04":
             # zip, pptx, docx, xlsx
-            dstream = io.BytesIO(data)
-            if zipfile.is_zipfile(dstream):
-                with zipfile.ZipFile(dstream, 'r') as zip_f:
-                    if "[Content_Types].xml" in zip_f.namelist():
-                        ftype = "office"
-                        if "word/document.xml" in zip_f.namelist():
-                            ftype = "word"
-                        elif "xl/workbook.xml" in zip_f.namelist():
-                            ftype = "xlsx"
-                        elif "ppt/presentation.xml" in zip_f.namelist():
-                            ftype = "pptx"
-                    else:
-                        ftype = "zip"
+            zip_f = MyZipFile(data)
+            if "[Content_Types].xml" in zip_f.namelist():
+                ftype = "office"
+                if "word/document.xml" in zip_f.namelist():
+                    ftype = "docs"
+                elif "xl/workbook.xml" in zip_f.namelist():
+                    ftype = "xlsx"
+                elif "ppt/presentation.xml" in zip_f.namelist():
+                    ftype = "pptx"   
             else:
-                # zip file의 size가 커서 다른 클러스터까지 이어지는 경우. 
-                # 바로 다음 클러스터에 이어질 가능성이 크지만, 항상 그럴거라는 보장이 없다.
-                # TODO 이런 경우 현재 클러스터에 있는 내용만 파싱해서 보여주고 끝낸다.
-                ftype = "zip(cluster size exceeded)"
+                ftype = "zip"
         elif data[:6] == b"\x37\x7A\xBC\xAF\x27\x1C":
             ftype = "7z"
         elif data[:4] == b"\x41\x4C\x5A\x01":
@@ -91,20 +89,62 @@ class FAT32Carver(FAT32Parser):
                 ftype = "hwp"
         elif data[:4] == b"\x52\x49\x46\x46":
             ftype = "avi"
-        elif data[:2] == b"\xFF\xFB":
+        elif data[:3] == b"\x49\x44\x33":
             ftype = "mp3"
+        elif data[:4] == b"\x01\x00\x00\x00":
+            ftype = "emf"
+        elif data[:4] == b"\x00\x00\x01\x00":
+            ftype = "ico"
+        elif data[:3] == b"\x00\x00\x01" and u8(data[4]) in range(0xb0, 0xc0):
+            ftype = "mpeg"
+        elif data[:4] == "\x52\x49\x46\x46":
+            ftype = "wav"
         else:
             return None
 
         return ftype
 
 
-if __name__=="__main__":
-    # image_path = input("[*] fat32 partition image path를 입력하세요 : ")  
-    image_path = "D:\\Source\\bob\\bob_filesystem\\fat32\\DriveE"
-    if (os.path.exists(image_path) == False):
-        print("[*] 입력한 경로에 파일이 없습니다")
-        sys.exit()
+class MyZipFile:
+    def __init__(self, data):
+        self.data = data
+        self.in_files = []
+        i = 0
+        while i + 30 < len(self.data):    # fname_len을 읽는 것을 보장하기 위해.
+            fsize = u32(self.data[i + 18 : i + 22])
+            fname_len = u16(self.data[i + 26 : i + 28])
+            if (i + 30 + fname_len) >= len(self.data):
+                break
 
-    parser = FAT32Carver(image_path)
-    parser.carving()
+            extra_len = u16(self.data[i + 28 : i + 30])
+            fname = self.data[i + 30 : i + 30 + fname_len]
+            fdata_start = i + 30 + fname_len + extra_len
+
+            fsize_or_zero = fsize if (fdata_start + fsize < len(self.data)) else 0    # fdata 영역이 현재 ZipFile의 전체 크기를 넘어가는 경우 방지.
+            if (fname_len != 0):
+                self.in_files.append({
+                    "fname": fname.decode("euc-kr"),
+                    "fstart": fdata_start,
+                    "fsize": fsize_or_zero
+                })
+            i = fdata_start + fsize
+    
+
+    def namelist(self):
+        return [in_file["fname"] for in_file in self.in_files]
+
+    def read(self, fname):
+        f = list(filter(lambda f: f["fname"] == fname, self.in_files))[0]
+        compressed_data = self.data[f["fstart"]:f["fstart"] + f["fsize"]]
+        try:
+            return zlib.decompress(compressed_data, wbits=-zlib.MAX_WBITS)
+        except:
+            return None
+
+
+if __name__=="__main__":
+    if len(sys.argv) < 2:
+        print("usage : python {} <path>".format(sys.argv[0]))
+    else:
+        parser = FAT32Carver(sys.argv[1])
+        parser.carving()
