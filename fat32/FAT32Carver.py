@@ -1,7 +1,5 @@
 import os, sys
 
-import io
-import zipfile
 import zlib
 import struct
 
